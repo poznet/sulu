@@ -1254,7 +1254,7 @@ define([
                     }
 
                     if (!!navigationUrlParams.length) {
-                        navigationUrl += '?' + navigationUrlParams.join('&')
+                        navigationUrl += '?' + navigationUrlParams.join('&');
                     }
 
                     header = {
