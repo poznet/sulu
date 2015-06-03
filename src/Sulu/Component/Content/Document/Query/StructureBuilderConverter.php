@@ -8,6 +8,12 @@ use Doctrine\ODM\PHPCR\Query\Builder\OperandDynamicField;
 use Sulu\Component\Webspace\Manager\WebspaceManagerInterface;
 use Sulu\Component\Content\Document\Behavior\LocalizedStructureBehavior;
 use Doctrine\ODM\PHPCR\Query\Builder\QueryBuilder;
+use PHPCR\SessionInterface;
+use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+use Sulu\Component\DocumentManager\MetadataFactoryInterface;
+use Sulu\Component\DocumentManager\PropertyEncoder;
+use Sulu\Component\Content\Document\Subscriber\StructureSubscriber;
+use PHPCR\Query\QOM\QueryObjectModelConstantsInterface as QOMConstants;
 
 class StructureBuilderConverter extends BuilderConverterSulu
 {
@@ -19,7 +25,7 @@ class StructureBuilderConverter extends BuilderConverterSulu
         SessionInterface $session,
         EventDispatcherInterface $dispatcher,
         MetadataFactoryInterface $factory,
-        PropertyEncoder $propertyEncoder,
+        PropertyEncoder $encoder,
         WebspaceManagerInterface $webspaceManager
     ) {
         parent::__construct($session, $dispatcher, $factory);
@@ -46,32 +52,44 @@ class StructureBuilderConverter extends BuilderConverterSulu
 
     protected function applySourceConstraints(QueryBuilder $builder)
     {
-        parent::applySourceConstraints();
+        parent::applySourceConstraints($builder);
 
         $locales = $builder->getLocale() ? array($builder->getLocale()) : $this->getAllLocales();
 
         foreach ($this->structures as $alias => $structureName) {
+            $compositeConstraint = null;
             foreach ($locales as $locale) {
                 $reflection = $this->aliasMetadata[$alias]->getReflection();
 
-                if ($reflection instanceof LocalizedStructureBehavior) {
-                    $structureTypeProp = $this->propertyEncoder->localizedSystemName(StructureSubscriber::STRUCTURE_TYPE_FIELD, $locale);
+                if ($reflection->isSubclassOf(LocalizedStructureBehavior::class)) {
+                    $structureTypeProp = $this->encoder->localizedSystemName(StructureSubscriber::STRUCTURE_TYPE_FIELD, $locale);
                 } else {
-                    $structureTypeProp = $this->propertyEncoder->systemName(StructureSubscriber::STRUCTURE_TYPE_FIELD);
+                    $structureTypeProp = $this->encoder->systemName(StructureSubscriber::STRUCTURE_TYPE_FIELD);
                 }
 
-                $this->constraint = $this->qomf->andConstraint(
-                    $this->constraint,
-                    $this->qomf->comparison(
-                        $this->qomf->propertyValue(
-                            $alias,
-                            $structureTypeProp
-                        ),
-                        QOMConstants::JCR_OPERATOR_EQUAL_TO,
-                        $this->qomf->literal($structureName)
-                    )
+                $structureConstraint = $this->qomf->comparison(
+                    $this->qomf->propertyValue(
+                        $alias,
+                        $structureTypeProp
+                    ),
+                    QOMConstants::JCR_OPERATOR_EQUAL_TO,
+                    $this->qomf->literal($structureName)
                 );
+
+                if (null === $compositeConstraint) {
+                    $compositeConstraint = $structureConstraint;
+                } else {
+                    $compositeConstraint = $this->qomf->orConstraint(
+                        $compositeConstraint,
+                        $structureConstraint
+                    );
+                }
             }
+
+            $this->constraint = $this->qomf->andConstraint(
+                $this->constraint,
+                $compositeConstraint
+            );
         }
     }
 
@@ -83,7 +101,7 @@ class StructureBuilderConverter extends BuilderConverterSulu
     {
         $locales = array();
         foreach ($this->webspaceManager->getAllLocalizations() as $localization) {
-            $locales[] = $localization->getLocale();
+            $locales[] = $localization->getLocalization();
         }
 
         return $locales;
